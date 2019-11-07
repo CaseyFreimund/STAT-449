@@ -1,0 +1,221 @@
+---
+title: "Predicting Heart Disease"
+author: "Casey Freimund, Alyssa Phippen, Samuel Vanderzee, Kelli Walter"
+date: 10/30/2019
+output: 
+    word_document: default
+---
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#Loads in required packages
+library(PerformanceAnalytics)
+library(psych)
+library(cluster)
+library(fpc)
+library(ggplot2)
+library(pROC)
+library(car)
+library(lmtest)
+library(gridExtra)
+```
+#### Introduction
+
+Given the data set including information on 14 different variables for 303 patients, we wanted to determine which of the variables were important in predicting heart disease in patients. In order to make these predictions, we started by exploring the data to see where important relationships lie and to see what groups the data formed in order to create a model. We created a model to predict the chances of heart disease based on the variables we deemed significant from earlier data exploration and model exploration.  
+
+#### Exploring the Data
+
+During our data exploration, we found missing values in the “ca” column (number of major vessels covered by fluoroscopy) as well as in the “thal” column. Instead of deleting these values, we decided to replace these entries with the median value of the values in each of these columns.
+
+For the clustering, we chose two components based on the “knee” of the scree plot appearing at component 2, as well as the fact that we were only considering two possible outcomes, that is, whether a patient had heart disease or not, so it made sense to include two components in the cluster analysis. We used the K-means and Ward clustering methods with two components because these were the methods that resulted in the highest percentages of explained point variability. We produced a test to compare if the clusters were different between the two methods. The test indicated that the methods were different, so we chose the K-means method over the Ward method based on the graphical representations. 
+
+Another way we explored the data was through a correlation matrix with all 14 variables. Most of the relationships were not significantly correlated, but there were two that were. The following graphs represent the relationships between the two pairs of variables: old peak & slope and num & thal. We wanted to incorporate these findings in our model creation. 
+
+```{r message=FALSE, warning=FALSE,echo=FALSE,results='hide'}
+#READS TABLE
+hd=read.table("processed.heartdisease.txt",sep = ",",header = TRUE)
+hd
+```
+
+```{r message=FALSE, warning=FALSE,echo=FALSE,results='hide'}
+#Changes all columns to numeric values for data exploration phase
+hd$ca=as.numeric(levels(hd$ca)[hd$ca])
+hd$thal=as.numeric(levels(hd$thal)[hd$thal])
+
+#Finds columns with NA values and replaces them with the Median value of that column
+colnames(hd)[colSums(is.na(hd)) > 0]
+hd$ca[is.na(hd$ca)] = median(hd$ca,na.rm = TRUE)
+hd$thal[is.na(hd$thal)] = median(hd$thal,na.rm = TRUE)
+```
+```{r message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
+#Clustering of Observations
+#creates a data frame where we do not change the levels of severity for heart disease
+hd.all.level=hd
+#Scaling both data sets for clustering
+hd.scaled=scale(hd[,-c(2,6,14)])
+hd.dist=dist(hd.scaled)
+
+hd.scaled2=scale(hd.all.level[,-c(2,6,14)])
+hd.dist2=dist(hd.scaled2)
+```
+
+```{r message=FALSE, warning=FALSE,echo=FALSE,results='hide',eval=FALSE}
+#Scree Plot
+output=princomp(hd[,-c(2,6,14)], cor=TRUE)
+plot(output,type="lines")
+abline(h=1,lty=2)
+
+#K-Means clustering into 2 groups
+hd.k2=kmeans(hd.scaled, centers=2, iter.max=100, nstart=25)
+hd.k2.clust=lapply(1:2, function(nc) hd$num[hd.k2$cluster==nc])
+
+#Ward Method of Clustering into 2 groups
+hd.ward.link=hclust(hd.dist, method='ward.D2')
+cut.2 <- cutree(hd.ward.link, k=2)
+ward.2.clust <- lapply(1:2, function(nc) hd$num[cut.2==nc])
+
+#Cluster Stats for comparing K-Means Clustering and Ward's Method
+cluster.stats(hd.dist, cut.2, hd.k2$cluster, compareonly=T)
+```
+
+```{r message=FALSE, warning=FALSE,echo=FALSE,results='hide', eval=FALSE}
+#Plots for K-Means Cluster
+
+#Silhouette Plot---> Needs to be opened in a new window.
+hd.k2.sil <- silhouette(hd.k2$cluster, hd.dist)
+plot(hd.k2.sil, main ="Silhouette plot - K-means")
+
+#Clusplot
+clusplot(hd, hd.k2$cluster, main='2D representation of the Cluster solution',color=TRUE, shade=TRUE,labels=2, lines=0)
+```
+
+```{r message=FALSE, warning=FALSE,echo=FALSE,results='hide', eval=FALSE}
+#Plots for Ward's Method Clusters
+
+#Silhouette Plot---> Needs to be opened in a new window.
+ward.sil <- silhouette(cut.2, hd.dist)
+plot(ward.sil, main ="Silhouette plot - Ward's Method")
+
+#Clusplot
+clusplot(hd, cut.2, main='2D representation of the Cluster solution',color=TRUE, shade=TRUE,labels=2, lines=0)
+```
+
+```{r message=FALSE, warning=FALSE,echo=FALSE,results='hide', eval=FALSE}
+#Enhanced correlation matrix for 2 most highly correlated predictor variables and predictor variable with response variable
+chart.Correlation(hd[,c(10,11)],histogram = FALSE)
+chart.Correlation(hd[,c(13,14)],histogram = FALSE)
+```
+
+```{r message=FALSE, warning=FALSE,echo=FALSE,results='hide'}
+#EFA of Variables
+mat=cor(hd)
+cortest.bartlett(mat,n=303)
+KMO(mat)
+
+fa.out=principal(hd[,-c(2,6,14)],nfactors=4,rotate="varimax")
+print.psych(fa.out,cut=.5,sort=TRUE)
+```
+#### Other Interesting Aspects of the Data
+```{r fig.align='center', message=FALSE, warning=FALSE,echo=FALSE}
+#takes all levels of severity and makes them equal to 1.
+#we are predicting the precense of heart disease or not
+hd$num=sapply(hd$num,function(x) replace(x,x>0,1))
+#Finding the MDS coordinates of the observations and graphing them to show a differences in the observations.
+hd.mds = cmdscale(hd.dist, eig=T)
+mds.coords=data.frame(Coordinate1=hd.mds$points[,1],Coordinate2=hd.mds$points[,2],diagnosis=as.factor(hd$num))
+
+hd.mds2 = cmdscale(hd.dist2, eig=T)
+mds.coords2=data.frame(Coordinate1=hd.mds2$points[,1],Coordinate2=hd.mds2$points[,2],diagnosis=as.factor(hd.all.level$num))
+
+
+level1d=ggplot(mds.coords,aes(Coordinate1,Coordinate2,color=diagnosis))+geom_point()+scale_color_manual(values=c("#e41a1c","#377eb8","#4daf4a","#984ea3","#ff7f00"))
+
+level4d=ggplot(mds.coords2,aes(Coordinate1,Coordinate2,color=diagnosis))+geom_point()+scale_color_manual(values=c("#e41a1c","#377eb8","#4daf4a","#984ea3","#ff7f00"))
+```
+
+During our data exploration, we came across an interesting observation regarding our diagnoses.  Our goal was to see if there was a visual difference among our individual observations.  We first created a distance matrix from our observations using all recorded variables, except for the individuals’ diagnosis.  By not including the diagnosis within our matrix, we are able to see how different each individual is from one another, based solely on their other health measurements.  In a way, we’re categorizing our individuals by their diagnosis, without using their diagnosis as direct form of measurement.  We then used multidimensional scaling to produce a data set where each row in the data represents an individual observation, and all of their recorded traits and symptoms are now defined by a single x-y coordinate.  By plotting these points and coloring them based on their presence of heart disease, or lack of, we can see two distinct groups in the graph below.
+
+```{r echo=FALSE}
+level1d+labs(title = "Presence of Heart Disease")
+```
+
+Based on this graph, it’s fair to assume that there is a distinct difference in the health measurements between patients with and without heart disease, but what about the varying levels of severity in heart disease?  To determine if there was a significant difference among the severities of heart disease, we repeated the above process, but instead colored individuals based on their severity, or lack of heart disease.  The graph below shows there is still a distinct difference between those without heart disease and those with any level of severity.  But, if we just look at patients with heart disease, there doesn’t appear to be a significant difference in their health measurements, in just two dimensions.
+
+```{r echo=FALSE}
+level4d+labs(title = "Presence and Severity of Heart Disease")
+```
+
+If we were to look at this same data set and use multidimensional scaling in three or four dimensions, it’s possible that we could see a significant difference in the severity of heart disease.  For our purpose, we decided to not further investigate or predict the severity of heart disease, and instead just predict the presence or lack of it.
+
+#### Model Creation and Selection
+```{r message=FALSE, warning=FALSE,echo=FALSE,results='hide'}
+#factoring
+hd$sex=factor(hd$sex)
+hd$cp=factor(hd$cp)
+hd$fbs=factor(hd$fbs)
+hd$restecg=factor(hd$restecg)
+hd$exang=factor(hd$exang)
+hd$slope=factor(hd$slope)
+hd$thal=factor(hd$thal)
+hd$ca=factor(hd$ca)
+
+#creating of full model
+hdmod1 <- glm(num~., data = hd)
+summary(hdmod1)
+hdpred1 <- predict(hdmod1, type="response")
+
+#roc curve
+hdroc1 <- roc(hd$num, hdpred1)
+hdroc1
+
+bptest(hdmod1)##testing for heteroskedasticity
+vif(hdmod1)##testing for multicollinearity
+```
+
+```{r message=FALSE, warning=FALSE,echo=FALSE,results='hide'}
+#model based on choosing lowest p value from cluster groups
+hdmod3 <- glm(num~sex+cp+exang+slope+ca+thal,data = hd)
+summary(hdmod3)
+hdpred3 <- predict(hdmod3, type="response")
+hdroc3 <- roc(hd$num, hdpred3)
+hdroc3
+
+#roc curve 
+#plot(hdroc3, print.thres="best")
+
+#misclassification rate for reduced model
+correct.s<-rep(0,times=nrow(hd))
+mypred.s <- rep(0,times=nrow(hd))
+for (j in 1:nrow(hd)) {
+  glm.fit.no.j<-glm(num ~ sex + cp + exang + slope + ca + thal, data=hd, subset=-j)
+  mypred.s[j]<-(predict(glm.fit.no.j,newdata=hd[j,],type='response') > 0.529)
+  correct.s[j] <- (mypred.s[j]==hd$num[j])
+}
+cv.misclass.s <- 1-mean(correct.s)
+cv.misclass.s
+
+#specificity and sensitivity of reduced model
+pred.reduced.hd <- ifelse(hdpred3 < .529, 0, 1)
+table(pred.reduced.hd, hd$num)
+spec = 152/(152+27)
+sens = 112/(112+12)
+spec
+sens
+
+#trestbps isn't significant, but removing it will decrease AUC
+anova.check=anova(hdmod3,hdmod1)
+anova.check
+1-pchisq(-diff(anova.check$`Resid. Dev`), anova.check$Df[2])
+
+#prediction
+newobs <- rbind( c('0','3','0','1', '1' ,'3'))
+dimnames(newobs) <- list(NULL,c('sex','cp', 'exang', 'slope', 'ca', 'thal'))
+newobs <- data.frame(newobs)
+predict.glm(hdmod3,newdata=newobs)
+
+```
+
+In order to create a model to efficiently and accurately predict heart disease in a patient, we started with a full model to include all variables then attempted to eliminate insignificant variables while ensuring accuracy. In our first attempt to eliminate variables, we decided to use the clusters we found earlier to decide which variables to keep and which to eliminate. Since the clusters showed which variables behaved similarly, we kept only one variable from each cluster, choosing the one that was the most significant from the full model. That model included ST depression induced by exercise relative to rest, chest pain type, number of major vessels colored by fluoroscopy, resting electrocardiographic results, thal diagnosis, maximum heart rate achieved, and resting blood pressure. To decide between our models, we compared the area under the curve (AUC) for each model; a higher AUC indicates a better model. The second model had a slightly lower AUC compared to the first, but it was close, so it was still accurate. We wanted to see if a smaller model could still give us good predictions, so we tried a different method to eliminate variables. For the third model we created, we chose to go back to the full model, and eliminate any insignificant variables (anything with p-value > 0.05). This left us with sex, chest pain type, slope of peak exercise ST segment, number of major vessels colored by flourosopy, thal diagnosis, and exercise induced angina. The third model gave us a similar AUC as the first two, and through and analysis of variance test, it was determined that the third model was not significantly different from the full model in terms of accuracy, so we chose the third model going forward since it included the least amount of variables. In addition to looking at the significance of the variables, we wanted to make sure to include the thal diagnosis variable since we saw in the exploratory section that it was highly correlated with the presence of heart disease. Also found during exploratory analysis was the relationship between the old peak and slope variables. Since the two were highly correlated, we wanted to make sure only one of those two was included in the final model to avoid redundancy. As another measure of accuracy for the chosen model, sensitivity (true positive rate) and specificity (true negative rate) were also calculated. After creating our model, we were able to use it to predict if a person has heart disease given their chest pain type, slope of peak exercise ST segment, number of major vessels colored by fluoroscopy, thal diagnosis, and exercise induced angina.
+
+#### Results and Conclusion
+
+In order to arrive at the best model for predicting whether or not a patient has heart disease, we compared the three general linear models we created. We determined that the reduced model including all significant variables was best. Again, this model had the variables sex, chest pain type, slope of the peak exercise ST segment, number of major vessels colored by flourosopy, thal diagnosis, and exercise induced angina. Any other variables were not deemed insignificant in determining if a patient has heart disease or not. Looking at a ROC curve using the final model created, the threshold of greater than .529 was found for predicting that the patient has heart disease. In terms of measuring accuracy, we used the misclassification rate, sensitivity and specificity. The misclassification rate of our model, using the .529 threshold, was 14.85%, the specificity was 85%, and the sensitivity was 90%.  Therefore, with our model, we correctly predict that a patient has heart disease 90% of the time, and predict that a patient does not have heart disease correctly 85% of the time. When using our model to predict diagnosis of heart disease for a specific patient, we were only interested in the variables that made up our model. For example, using our model to predict for a female patient with non-anginal pain, no exercise induced angina, upsloping peak exercise ST segment, 1 major vessel colored by fluoroscopy, and normal thal diagnosis, the model gave a value of 0.1507 for the response variable of heart disease diagnosis. Therefore, using the threshold of greater than .529 as having heart disease, we can conclude that this specific patient does not have heart disease.
+
